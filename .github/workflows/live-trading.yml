@@ -1,0 +1,48 @@
+name: Live FX Session Breakout Trading
+
+on:
+  schedule:
+    # Each window is generous margin covering both EDT/EST versions of that
+    # session's actual open hour -- the real gate is live_fx_runner.py
+    # checking (a) the current ET hour against config.SESSIONS and (b)
+    # OANDA's tradeable flag, so firing outside real hours or on a
+    # weekend/holiday is a harmless no-op.
+    - cron: "*/15 21-23 * * *"   # Sydney (17:00 ET open)
+    - cron: "*/15 23,0,1 * * *"  # Tokyo (19:00 ET open, wraps past UTC midnight)
+    - cron: "*/15 7-9 * * *"     # London (3:00 ET open)
+    - cron: "*/15 12-14 * * *"  # New York (8:00 ET open)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run live FX signal runner
+        env:
+          OANDA_API_TOKEN: ${{ secrets.OANDA_API_TOKEN }}
+          OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
+        run: python broker/live_fx_runner.py --execute
+
+      - name: Persist kill-switch state if it changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain broker/state/)" ]; then
+            git add broker/state/
+            git commit -m "Update kill-switch state [skip ci]"
+            git push
+          fi

@@ -1,0 +1,7 @@
+.env
+.venv/
+data/prices/
+data/prices_live/
+results/
+logs/
+__pycache__/
