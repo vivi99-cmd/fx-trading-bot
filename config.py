@@ -46,6 +46,23 @@ SESSIONS = {
     "new_york": {"open_hour_et": 8, "lookback_hours": 5},
 }
 
+# How long after a session's open the live runner will still consider that
+# session's breakout. This exists because GitHub Actions delivers scheduled
+# runs late and drops most of them -- in one 60-run sample, only 7 landed in
+# the exact ET open hour and London never fired at all. Matching on the exact
+# open hour meant the bot was gated out of nearly every session it was
+# scheduled for. Widening to a window is about surviving the scheduler, not
+# about trading a different setup: the breakout itself is still only detected
+# in the first hour after open (see strategies/session_breakout.py), and
+# MAX_SIGNAL_AGE_MINUTES below is what actually bounds how stale an entry can be.
+SIGNAL_WINDOW_HOURS = 3
+
+# Hard staleness bound: never enter on a breakout whose trigger is older than
+# this. The backtest assumes entry at the trigger price the moment it's
+# breached; a late fill drifts from that assumption, so this caps the drift.
+# Anything older is reported and skipped rather than traded.
+MAX_SIGNAL_AGE_MINUTES = 90
+
 INITIAL_CAPITAL = 1_000
 RISK_PCT_PER_TRADE = 0.01  # fraction of equity risked per trade (based on stop-loss distance)
 BREAKOUT_BUFFER_PCT = 0.0005  # price must clear the range by this fraction to count as a real breakout, not noise

@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   run-bot:
@@ -37,12 +38,39 @@ jobs:
           OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
         run: python broker/live_fx_runner.py --execute
 
-      - name: Persist kill-switch state if it changed
+      - name: Persist trading state if it changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if [ -n "$(git status --porcelain broker/state/)" ]; then
             git add broker/state/
-            git commit -m "Update kill-switch state [skip ci]"
+            git commit -m "Update trading state [skip ci]"
+            # Another scheduled run may have pushed since checkout; rebase
+            # rather than fail, since losing an acted-signal record would
+            # allow a duplicate entry on the next run.
+            git pull --rebase --autostash
             git push
+          fi
+
+      # A run that dies is otherwise invisible unless you happen to open the
+      # Actions tab. One transient OANDA 401 already cost a New York session
+      # this way, unnoticed for over a week. Reuses a single open issue so
+      # repeated failures bump one thread instead of filing dozens.
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          existing=$(gh issue list --label bot-failure --state open --limit 1 --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Another failed run: $run_url"
+          else
+            gh label create bot-failure --color B60205 --description "Live trading run failed" 2>/dev/null || true
+            gh issue create \
+              --title "Live FX trading run failed" \
+              --label bot-failure \
+              --body "The scheduled live FX run failed: $run_url
+
+          Trading is halted until this run succeeds again. Close this issue once resolved."
           fi

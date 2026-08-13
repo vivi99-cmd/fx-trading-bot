@@ -11,9 +11,43 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 import config
 
+import time
+
 import requests
 
 BASE_URL = "https://api-fxpractice.oanda.com"
+
+# Read requests get retried; writes never do. A duplicate GET is free, a
+# duplicate order is a second position. Prompted by a run that died on a
+# one-off 401 from OANDA during the New York session -- the token was fine
+# before and after, so a single blip cost the only NY signal in a 60-run
+# sample. 401 is included deliberately for that reason; if credentials are
+# genuinely wrong every attempt fails and the error still surfaces.
+RETRY_STATUS_CODES = {401, 429, 500, 502, 503, 504}
+MAX_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 2
+
+
+def _get_with_retry(url: str, token: str, **kwargs):
+    last_error = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            resp = requests.get(url, headers=_headers(token), timeout=10, **kwargs)
+        except requests.RequestException as exc:
+            last_error = exc
+        else:
+            if resp.status_code not in RETRY_STATUS_CODES:
+                return resp
+            last_error = requests.HTTPError(f"{resp.status_code} from {url}", response=resp)
+
+        if attempt < MAX_ATTEMPTS:
+            wait = RETRY_BACKOFF_SECONDS * attempt
+            print(f"OANDA request failed ({last_error}), retry {attempt}/{MAX_ATTEMPTS - 1} in {wait}s")
+            time.sleep(wait)
+
+    if isinstance(last_error, requests.HTTPError) and last_error.response is not None:
+        return last_error.response  # let the caller's raise_for_status report it
+    raise last_error
 
 
 def _get_credentials():
@@ -33,7 +67,7 @@ def _headers(token: str) -> dict:
 
 def get_account_summary() -> dict:
     token, account_id = _get_credentials()
-    resp = requests.get(f"{BASE_URL}/v3/accounts/{account_id}/summary", headers=_headers(token), timeout=10)
+    resp = _get_with_retry(f"{BASE_URL}/v3/accounts/{account_id}/summary", token)
     resp.raise_for_status()
     return resp.json()["account"]
 
@@ -41,11 +75,10 @@ def get_account_summary() -> dict:
 def get_pricing(instruments: list) -> dict:
     """Returns {instrument: {"bid":..., "ask":..., "tradeable": bool}}."""
     token, account_id = _get_credentials()
-    resp = requests.get(
+    resp = _get_with_retry(
         f"{BASE_URL}/v3/accounts/{account_id}/pricing",
-        headers=_headers(token),
+        token,
         params={"instruments": ",".join(instruments)},
-        timeout=10,
     )
     resp.raise_for_status()
     result = {}
@@ -61,7 +94,7 @@ def get_pricing(instruments: list) -> dict:
 def get_open_position(instrument: str):
     """Returns None if flat, else {'direction': 'long'|'short', 'units': float}."""
     token, account_id = _get_credentials()
-    resp = requests.get(f"{BASE_URL}/v3/accounts/{account_id}/positions/{instrument}", headers=_headers(token), timeout=10)
+    resp = _get_with_retry(f"{BASE_URL}/v3/accounts/{account_id}/positions/{instrument}", token)
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
@@ -109,7 +142,7 @@ def close_position(instrument: str, direction: str) -> dict:
 
 def close_all_positions() -> list:
     token, account_id = _get_credentials()
-    resp = requests.get(f"{BASE_URL}/v3/accounts/{account_id}/openPositions", headers=_headers(token), timeout=10)
+    resp = _get_with_retry(f"{BASE_URL}/v3/accounts/{account_id}/openPositions", token)
     resp.raise_for_status()
     results = []
     for position in resp.json()["positions"]:
