@@ -1,3 +1,4 @@
+import math
 import sys
 from datetime import time as dtime, timedelta
 from pathlib import Path
@@ -7,6 +8,35 @@ import config
 from strategies.fx_utils import ET, to_et
 
 import pandas as pd
+
+
+def bars_per_hour(interval: str = None) -> float:
+    """Bars an hour of data should contain at the configured interval."""
+    interval = interval or config.INTERVAL
+    if interval.endswith("m"):
+        return 60.0 / int(interval[:-1])
+    if interval.endswith("h"):
+        return 1.0 / int(interval[:-1])
+    raise ValueError(f"cannot derive bars per hour from interval {interval!r}")
+
+
+def min_range_bars(lookback_hours: int) -> int:
+    """How many bars a lookback window must contain to be trusted.
+
+    The old guard was `len(range_window) < 2`, which accepted 2 bars where
+    London's 8-hour window expects 32. That is a placeholder, not a
+    threshold, and it let bad data through as real setups: on 2026-08-14 the
+    Tokyo window arrived with 2 bars instead of 8 and a measured range of
+    0.0 pips. Range size drives both the stop distance and the position
+    size, so a window built from a couple of sparse bars produces a stop
+    inside the spread and -- because size is risk/stop-distance -- the
+    largest position in the book behind it.
+
+    yfinance FX bars are indicative and go missing in thin hours, so this is
+    a data-quality check rather than a strategy parameter.
+    """
+    expected = lookback_hours * bars_per_hour()
+    return max(2, math.ceil(expected * config.MIN_RANGE_BAR_COVERAGE))
 
 
 def generate_session_trades(price_df: pd.DataFrame, session_name: str) -> list:
@@ -32,7 +62,7 @@ def generate_session_trades(price_df: pd.DataFrame, session_name: str) -> list:
         detection_end = open_time + timedelta(hours=1)
 
         range_window = df[(df.index >= range_start) & (df.index < open_time)]
-        if len(range_window) < 2:
+        if len(range_window) < min_range_bars(lookback_hours):
             continue
         range_high = range_window["High"].max()
         range_low = range_window["Low"].min()

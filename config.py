@@ -63,6 +63,12 @@ SIGNAL_WINDOW_HOURS = 3
 # Anything older is reported and skipped rather than traded.
 MAX_SIGNAL_AGE_MINUTES = 90
 
+# Fraction of a lookback window's expected bars that must actually be present
+# before the measured range is trusted. Guards against yfinance returning a
+# sparse window in thin hours, which produces a meaninglessly small range --
+# and therefore a stop inside the spread and an oversized position behind it.
+MIN_RANGE_BAR_COVERAGE = 0.7
+
 INITIAL_CAPITAL = 1_000
 RISK_PCT_PER_TRADE = 0.01  # fraction of equity risked per trade (based on stop-loss distance)
 BREAKOUT_BUFFER_PCT = 0.0005  # price must clear the range by this fraction to count as a real breakout, not noise
